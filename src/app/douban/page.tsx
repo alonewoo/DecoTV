@@ -38,11 +38,8 @@ function DoubanPageClient() {
   const [doubanData, setDoubanData] = useState<DoubanItem[]>([]);
   const [sourceData, setSourceData] = useState<DoubanItem[]>([]);
 
-  // 豆瓣模式分页状态
+  // 豆瓣模式加载状态
   const [loading, setLoading] = useState(false);
-  const [doubanPage, setDoubanPage] = useState(0);
-  const [doubanHasMore, setDoubanHasMore] = useState(true);
-  const [doubanLoadingMore, setDoubanLoadingMore] = useState(false);
 
   // 源模式分页状态
   const [sourceLoadingMore, setSourceLoadingMore] = useState(false);
@@ -60,7 +57,6 @@ function DoubanPageClient() {
     secondarySelection: '',
     multiLevelSelection: {} as Record<string, string>,
     selectedWeekday: '',
-    doubanPage: 0,
   });
 
   const type = searchParams.get('type') || 'movie';
@@ -148,7 +144,6 @@ function DoubanPageClient() {
       secondarySelection,
       multiLevelSelection: multiLevelValues,
       selectedWeekday,
-      doubanPage,
     };
   }, [
     type,
@@ -156,7 +151,6 @@ function DoubanPageClient() {
     secondarySelection,
     multiLevelValues,
     selectedWeekday,
-    doubanPage,
   ]);
 
   // 初始化时标记选择器为准备好状态
@@ -239,11 +233,9 @@ function DoubanPageClient() {
   }, [type, customCategories]);
 
   // 生成骨架屏数据
-  const skeletonData = Array.from({ length: 25 }, (_, index) => index);
+  const skeletonData = Array.from({ length: 50 }, (_, index) => index);
 
   // 参数快照比较函数
-  // FIX: 不比较 doubanPage，因为分页加载时页码会变化
-  // 我们只需要确保 type/selection/filter 参数没有被用户切换
   const isSnapshotEqual = useCallback(
     (
       snapshot1: {
@@ -252,7 +244,6 @@ function DoubanPageClient() {
         secondarySelection: string;
         multiLevelSelection: Record<string, string>;
         selectedWeekday: string;
-        doubanPage: number;
       },
       snapshot2: {
         type: string;
@@ -260,11 +251,8 @@ function DoubanPageClient() {
         secondarySelection: string;
         multiLevelSelection: Record<string, string>;
         selectedWeekday: string;
-        doubanPage: number;
       },
     ) => {
-      // 只比较筛选条件，不比较页码
-      // 页码变化是正常的分页行为，不应阻止数据追加
       return (
         snapshot1.type === snapshot2.type &&
         snapshot1.primarySelection === snapshot2.primarySelection &&
@@ -286,7 +274,7 @@ function DoubanPageClient() {
           kind: 'tv' as const,
           category: type,
           type: secondarySelection,
-          pageLimit: 25,
+          pageLimit: 50,
           pageStart,
         };
       }
@@ -296,7 +284,7 @@ function DoubanPageClient() {
         kind: type as 'tv' | 'movie',
         category: primarySelection,
         type: secondarySelection,
-        pageLimit: 25,
+        pageLimit: 50,
         pageStart,
       };
     },
@@ -312,7 +300,6 @@ function DoubanPageClient() {
       secondarySelection,
       multiLevelSelection: multiLevelValues,
       selectedWeekday,
-      doubanPage: 0,
     };
 
     // 【缓存优先】生成缓存键
@@ -332,20 +319,12 @@ function DoubanPageClient() {
       );
       setDoubanData(cachedData);
       setLoading(false);
-      // FIX: 缓存命中时也要重置分页状态，否则 doubanPage 保持旧值会导致跳页
-      setDoubanPage(0);
-      setDoubanHasMore(cachedData.length >= 25);
-      setDoubanLoadingMore(false);
       return;
     }
 
     try {
       setLoading(true);
-      // 确保在加载初始数据时重置页面状态
       setDoubanData([]);
-      setDoubanPage(0);
-      setDoubanHasMore(true);
-      setDoubanLoadingMore(false);
 
       let data: DoubanResult;
 
@@ -360,7 +339,7 @@ function DoubanPageClient() {
           data = await getDoubanList({
             tag: selectedCategory.query,
             type: selectedCategory.type,
-            pageLimit: 25,
+            pageLimit: 50,
             pageStart: 0,
           });
         } else {
@@ -397,7 +376,7 @@ function DoubanPageClient() {
       } else if (type === 'anime') {
         data = await getDoubanRecommends({
           kind: primarySelection === '番剧' ? 'tv' : 'movie',
-          pageLimit: 25,
+          pageLimit: 50,
           pageStart: 0,
           category: '动画',
           format: primarySelection === '番剧' ? '电视剧' : '',
@@ -416,7 +395,7 @@ function DoubanPageClient() {
       } else if (primarySelection === '全部') {
         data = await getDoubanRecommends({
           kind: type === 'show' ? 'tv' : (type as 'tv' | 'movie'),
-          pageLimit: 25,
+          pageLimit: 50,
           pageStart: 0, // 初始数据加载始终从第一页开始
           category: multiLevelValues.type
             ? (multiLevelValues.type as string)
@@ -445,7 +424,6 @@ function DoubanPageClient() {
 
         if (isSnapshotEqual(requestSnapshot, currentSnapshot)) {
           setDoubanData(data.list);
-          setDoubanHasMore(data.list.length !== 0);
           setLoading(false);
 
           // 【缓存写入】保存到缓存，下次瞬间加载
@@ -514,156 +492,6 @@ function DoubanPageClient() {
     loadInitialData,
     currentSource, // 添加 currentSource 依赖
   ]);
-
-  // 单独处理 doubanPage 变化（加载更多）
-  useEffect(() => {
-    if (doubanPage > 0) {
-      const fetchMoreData = async () => {
-        // 创建当前参数的快照
-        const requestSnapshot = {
-          type,
-          primarySelection,
-          secondarySelection,
-          multiLevelSelection: multiLevelValues,
-          selectedWeekday,
-          doubanPage,
-        };
-
-        try {
-          setDoubanLoadingMore(true);
-
-          let data: DoubanResult;
-          if (type === 'custom') {
-            // 自定义分类模式：根据选中的一级和二级选项获取对应的分类
-            const selectedCategory = customCategories.find(
-              (cat) =>
-                cat.type === primarySelection &&
-                cat.query === secondarySelection,
-            );
-
-            if (selectedCategory) {
-              data = await getDoubanList({
-                tag: selectedCategory.query,
-                type: selectedCategory.type,
-                pageLimit: 25,
-                pageStart: doubanPage * 25,
-              });
-            } else {
-              throw new Error('没有找到对应的分类');
-            }
-          } else if (type === 'anime' && primarySelection === '每日放送') {
-            // 每日放送模式下，不进行数据请求，返回空数据
-            data = {
-              code: 200,
-              message: 'success',
-              list: [],
-            };
-          } else if (type === 'anime') {
-            data = await getDoubanRecommends({
-              kind: primarySelection === '番剧' ? 'tv' : 'movie',
-              pageLimit: 25,
-              pageStart: doubanPage * 25,
-              category: '动画',
-              format: primarySelection === '番剧' ? '电视剧' : '',
-              region: multiLevelValues.region
-                ? (multiLevelValues.region as string)
-                : '',
-              year: multiLevelValues.year
-                ? (multiLevelValues.year as string)
-                : '',
-              platform: multiLevelValues.platform
-                ? (multiLevelValues.platform as string)
-                : '',
-              sort: multiLevelValues.sort
-                ? (multiLevelValues.sort as string)
-                : '',
-              label: multiLevelValues.label
-                ? (multiLevelValues.label as string)
-                : '',
-            });
-          } else if (primarySelection === '全部') {
-            data = await getDoubanRecommends({
-              kind: type === 'show' ? 'tv' : (type as 'tv' | 'movie'),
-              pageLimit: 25,
-              pageStart: doubanPage * 25,
-              category: multiLevelValues.type
-                ? (multiLevelValues.type as string)
-                : '',
-              format: type === 'show' ? '综艺' : type === 'tv' ? '电视剧' : '',
-              region: multiLevelValues.region
-                ? (multiLevelValues.region as string)
-                : '',
-              year: multiLevelValues.year
-                ? (multiLevelValues.year as string)
-                : '',
-              platform: multiLevelValues.platform
-                ? (multiLevelValues.platform as string)
-                : '',
-              sort: multiLevelValues.sort
-                ? (multiLevelValues.sort as string)
-                : '',
-              label: multiLevelValues.label
-                ? (multiLevelValues.label as string)
-                : '',
-            });
-          } else {
-            data = await getDoubanCategories(getRequestParams(doubanPage * 25));
-          }
-
-          if (data.code === 200) {
-            // 检查参数是否仍然一致，如果一致才设置数据
-            // 使用 ref 获取最新的当前值
-            const currentSnapshot = { ...currentParamsRef.current };
-
-            console.log('🔍 [fetchMoreData] Snapshot comparison:', {
-              request: requestSnapshot,
-              current: currentSnapshot,
-              isEqual: isSnapshotEqual(requestSnapshot, currentSnapshot),
-            });
-
-            if (isSnapshotEqual(requestSnapshot, currentSnapshot)) {
-              // FIX: Manual append logic for reliable infinite scrolling
-              console.log(
-                '✅ [fetchMoreData] Appending',
-                data.list.length,
-                'items to existing',
-                doubanData.length,
-              );
-              setDoubanData((prev) => [...prev, ...data.list]);
-              setDoubanHasMore(data.list.length >= 25);
-            } else {
-              console.log('❌ 参数不一致，不执行任何操作，避免设置过期数据');
-            }
-          } else {
-            throw new Error(data.message || '获取数据失败');
-          }
-        } catch (err) {
-          console.error(err);
-        } finally {
-          setDoubanLoadingMore(false);
-        }
-      };
-
-      fetchMoreData();
-    }
-  }, [
-    doubanPage,
-    type,
-    primarySelection,
-    secondarySelection,
-    customCategories,
-    multiLevelValues,
-    selectedWeekday,
-  ]);
-
-  // Restored infinite scrolling within VirtualGrid implementation
-  // VirtualGrid 触底回调 - 触发加载更多
-  const handleLoadMore = useCallback(() => {
-    if (!doubanHasMore || doubanLoadingMore || loading) {
-      return;
-    }
-    setDoubanPage((prev) => prev + 1);
-  }, [doubanHasMore, doubanLoadingMore, loading]);
 
   // FIX: Source mode infinite scrolling with separate pagination state
   const handleSourceLoadMore = useCallback(() => {
@@ -748,11 +576,7 @@ function DoubanPageClient() {
       // 只有当值真正改变时才设置loading状态
       if (value !== primarySelection) {
         setLoading(true);
-        // 立即重置页面状态，防止基于旧状态的请求
-        setDoubanPage(0);
         setDoubanData([]);
-        setDoubanHasMore(true);
-        setDoubanLoadingMore(false);
 
         // 清空 MultiLevelSelector 状态
         setMultiLevelValues({
@@ -799,11 +623,7 @@ function DoubanPageClient() {
       // 只有当值真正改变时才设置loading状态
       if (value !== secondarySelection) {
         setLoading(true);
-        // 立即重置页面状态，防止基于旧状态的请求
-        setDoubanPage(0);
         setDoubanData([]);
-        setDoubanHasMore(true);
-        setDoubanLoadingMore(false);
         setSecondarySelection(value);
       }
     },
@@ -831,11 +651,7 @@ function DoubanPageClient() {
       }
 
       setLoading(true);
-      // 立即重置页面状态，防止基于旧状态的请求
-      setDoubanPage(0);
       setDoubanData([]);
-      setDoubanHasMore(true);
-      setDoubanLoadingMore(false);
       setMultiLevelValues(values);
     },
     [multiLevelValues],
@@ -923,11 +739,8 @@ function DoubanPageClient() {
 
       // === Step 1: 立即重置所有状态，防止状态污染 ===
       setLoading(true);
-      setDoubanPage(0);
       setDoubanData([]); // 清空豆瓣数据
       setSourceData([]); // 清空源数据
-      setDoubanHasMore(true);
-      setDoubanLoadingMore(false);
       setSourceHasMore(false);
       setSourceLoadingMore(false);
       setSourcePage(1);
@@ -1219,13 +1032,10 @@ function DoubanPageClient() {
               <p className='text-sm mt-2'>从上方分类列表中选择</p>
             </div>
           ) : (
-            // 显示豆瓣数据 - 使用 VirtualGrid + 无限滚动
+            // 显示豆瓣数据 - 使用 VirtualGrid
             <VirtualGrid
               items={doubanData}
               priorityCount={12}
-              hasMore={doubanHasMore}
-              isLoadingMore={doubanLoadingMore}
-              onLoadMore={handleLoadMore}
               renderItem={(item, priority, index) => (
                 <div key={`${item.title}-${index}`} className='w-full h-full'>
                   <VideoCard
@@ -1245,16 +1055,6 @@ function DoubanPageClient() {
               )}
             />
           )}
-
-          {/* 注意: 加载指示器已移入 VirtualGrid 组件内部 */}
-          {/* 没有更多数据提示 - 仅在非源数据模式下显示 */}
-          {!doubanHasMore &&
-            doubanData.length > 0 &&
-            currentSource === 'auto' && (
-              <div className='text-center text-gray-500 py-4'>
-                已加载全部内容
-              </div>
-            )}
         </div>
       </div>
     </PageLayout>
